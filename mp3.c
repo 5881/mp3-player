@@ -28,8 +28,8 @@
 // Set SCLK = PCLK / 2 boudrate is bits 3-5 in SPICR1 000 is pclk/2
 // 
 // в libopencm3 здесь ошибка поэтому переопределим
-
-
+uint8_t ulcode[3]={16,32,128}; //код разблокировки
+uint8_t lock=0;
 uint16_t files_count=0, track=1;
 uint8_t zanuda_mode=0, rand_mode=0;
 char mode[3]="  ";
@@ -202,7 +202,22 @@ void fat_tst(){
 
 //void name_normaliser
 
-
+void unlock(uint8_t key){
+	//Ждя разблокировки надо последовательно нажать три клавиши
+	//указанные в массиве ulcode[3] см выше.
+	static uint8_t i=0;
+	//stprintf("pres key %d\r\n", ulcode[i]);
+	//stprintf("key=%d,i=%d,[i]=%d\r\n",key,i,ulcode[i]);
+	if(key==ulcode[i]){
+		while(read_key())__asm__("nop"); i++;} else i=0;
+	if(i>2){
+		lock=0;
+		i=0;
+		stprintf("unlocked!\r\n",lock);
+		return;
+		}
+		stprintf("pres key %d\r\n", ulcode[i]);
+	}
 
 uint8_t play_file(char *name ){
 	stprintf("> %s\r\n",name);
@@ -255,46 +270,54 @@ uint8_t play_file(char *name ){
  * 64 128
  * 1  2
  * 4  8
-  */				
-				
-				switch(key){
-					case 2: //следующий трек
-						f_close(&file);
-						vs_write_sci(SCI_VOL,0xffff);//mute
-						vs_send_zero();
-						return 3;
-						break;
-					case 1: //предидущий трек
-						f_close(&file);
-						vs_write_sci(SCI_VOL,0xffff);//mute
-						vs_send_zero();
-						return 4;
-						break;
-					case 8://громче
-						if(vol>10)vol-=10;//это не ошибка!
-						vs_write_sci(SCI_VOL,vol*0x101);
-						break;
-					case 4://тише
-						if(vol<244)vol+=10;
-						vs_write_sci(SCI_VOL,vol*0x101);
-						break;
-					case 16://пауза
-						vs_write_sci(SCI_VOL,0xffff);//mute
-						vs_send_zero();
-						while(read_key())__asm__("nop");
-						while(!read_key())__asm__("nop");
-						while(read_key())__asm__("nop");
-						vs_write_sci(SCI_VOL,vol*0x101);
-						break;
-					case 32://повтор трека
-						while(read_key())__asm__("nop");
-						zanuda_mode=!zanuda_mode;
-						break;
-					case 64://рандом
-						while(read_key())__asm__("nop");
-						rand_mode=!rand_mode;
-						break;
+  */			if(!lock){	
+					switch(key){
+						case 2: //следующий трек
+							f_close(&file);
+							vs_write_sci(SCI_VOL,0xffff);//mute
+							vs_send_zero();
+							return 3;
+							break;
+						case 1: //предидущий трек
+							f_close(&file);
+							vs_write_sci(SCI_VOL,0xffff);//mute
+							vs_send_zero();
+							return 4;
+							break;
+						case 8://громче
+							if(vol>10)vol-=10;//это не ошибка!
+							vs_write_sci(SCI_VOL,vol*0x101);
+							break;
+						case 4://тише
+							if(vol<244)vol+=10;
+							vs_write_sci(SCI_VOL,vol*0x101);
+							break;
+						case 16://пауза
+							vs_write_sci(SCI_VOL,0xffff);//mute
+							vs_send_zero();
+							while(read_key())__asm__("nop");
+							while(!read_key())__asm__("nop");
+							while(read_key())__asm__("nop");
+							vs_write_sci(SCI_VOL,vol*0x101);
+							break;
+						case 32://повтор трека
+							while(read_key())__asm__("nop");
+							zanuda_mode=!zanuda_mode;
+							break;
+						case 64://рандом
+							while(read_key())__asm__("nop");
+							rand_mode=!rand_mode;
+							break;
+						case 128:
+							lock=1;
+							stprintf("keyboard are locked\r\n",lock);
+							while(read_key())__asm__("nop");
+							break;
+						}
+					
 					}
+					if(lock && key)unlock(key);	
+					//stprintf("at play lock=%d\r\n",lock); //отладочный вывод
 				}
 	
 	}while(bytes_read==FILE_BUFFER_SIZE);
