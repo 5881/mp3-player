@@ -7,6 +7,10 @@ CFILES += st7735_128x160.c st_printf.c sdcard.c
 CFILES += ff.c diskio.c ffunicode.c
 CFILES += vs1011e.c  8key.c
 
+OPT_FLAGS ?= -O2
+CFLAGS += -Wall $(OPT_FLAGS) -std=gnu99 -MD -I.
+LDFLAGS += $(OPT_FLAGS)
+
 #AFILES += api-asm.S
 
 # TODO - you will need to edit these two lines!

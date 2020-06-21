@@ -23,7 +23,7 @@
 #define SDI_MAX_TRANSFER_SIZE 32
 #define SDI_END_FILL_BYTES 512 /* Arbitrarily chosen value */
 #define min(a,b) (((a)<(b))?(a):(b))
-
+#define MAX_PLAYMODE 2
 //#define SDSPIFORSAGE() {SPI_CR1(SDSPI)=(SPI_CR1(SDSPI) & 0xffc7)|1<<3;}
 // Set SCLK = PCLK / 2 boudrate is bits 3-5 in SPICR1 000 is pclk/2
 // 
@@ -32,6 +32,9 @@ uint8_t ulcode[3]={16,32,128}; //код разблокировки
 uint8_t lock=0;
 uint16_t files_count=0, track=1;
 uint8_t zanuda_mode=0, rand_mode=0;
+uint16_t mp3_cnt=0;
+uint8_t play_mode=0;//0-последовательно, 1-рандом, 2-плейлист
+uint8_t play_mode_change=0; //индикатор смены режима проигрывания
 char mode[3]="  ";
 
 
@@ -203,7 +206,7 @@ void fat_tst(){
 //void name_normaliser
 
 void unlock(uint8_t key){
-	//Ждя разблокировки надо последовательно нажать три клавиши
+	//Для разблокировки надо последовательно нажать три клавиши
 	//указанные в массиве ulcode[3] см выше.
 	static uint8_t i=0;
 	//stprintf("pres key %d\r\n", ulcode[i]);
@@ -259,10 +262,21 @@ uint8_t play_file(char *name ){
 				 else st7735_progress_bar(112,bar,MAGENTA,BLACK);
 				//if(zanuda_mode)st7735_drawchar(0,112,'R',WHITE,BLACK);
 				if(zanuda_mode) mode[1]='Z'; else mode[1]=' ';
-				if(rand_mode) mode[0]='R'; else mode[0]='S';
+				switch(play_mode){
+					case 0:
+						mode[0]='S';
+						break;
+					case 1:
+						mode[0]='R';
+						break;
+					case 2:
+						mode[0]='P';
+						break;
+					}
+				//if(rand_mode) mode[0]='R'; else mode[0]='S';
 				stprintf_at(0, 120,RED,BLACK,1,
-					"%4d/%dK %d:%02d %s%3d/%3d",
-							pos/1024,fsize/1024, min, sec, mode, track, files_count);
+					"%4d/%4dK %d:%02d %s%3d/%3d ",
+					pos/1024,fsize/1024, min, sec, mode, track, mp3_cnt);
 				
 				key=read_key();
 /*
@@ -304,9 +318,16 @@ uint8_t play_file(char *name ){
 							while(read_key())__asm__("nop");
 							zanuda_mode=!zanuda_mode;
 							break;
-						case 64://рандом
+						case 64://рандом-последовательно-плейлист
 							while(read_key())__asm__("nop");
-							rand_mode=!rand_mode;
+							//rand_mode=!rand_mode;
+							if(play_mode<MAX_PLAYMODE)play_mode++;
+														else play_mode=0;
+							play_mode_change=1;
+							//f_close(&file);
+							//vs_write_sci(SCI_VOL,0xffff);//mute
+							//vs_send_zero();
+							//return 5;
 							break;
 						case 128:
 							lock=1;
@@ -381,6 +402,56 @@ uint8_t get_name_mp3(char *path, uint16_t n, char *name){
 	strcpy(name,fileInfo.fname);     
     return 0;	
 	}
+/**********************************************************************
+ * Функции работы с плейлистом
+ * плейлист имеет расширение .m3u
+ * коментарии начинаются с #
+ **********************************************************************/ 
+
+uint16_t get_playlist_size(char *playlist){
+	FIL file;
+	uint16_t cnt=0;
+	char temp[512];
+	char *temp_pointer;
+	//f_open(playlist);
+	if(f_open(&file, playlist, FA_READ)){
+		stprintf("playlist not found!\r\n");
+		play_mode=1;
+		return 1;
+		}
+	do{
+		temp_pointer=f_gets(temp,512,&file);
+		while(*temp_pointer==' ')temp_pointer++;
+		if(*temp_pointer=='#') continue; else cnt++;
+		}while(!f_eof(&file));
+	f_close(&file);
+	return cnt;
+	}
+	
+uint8_t get_name_mp3_from_playlist(char *playlist, uint16_t n, char *name){
+	FIL file;
+	uint16_t cnt=0;
+	char temp[512];
+	char *temp_pointer, *temp_pointer2;
+	if(f_open(&file, playlist, FA_READ)){
+		stprintf("playlist not found!\r\n");
+		play_mode=1;
+		return 1;
+	}
+	do{
+		temp_pointer=f_gets(temp,512,&file);
+		while(*temp_pointer==' ')temp_pointer++;
+		if(*temp_pointer=='#') continue; else cnt++;
+		if(cnt==n){
+			//Вся эта канитель чтобы убрать \r\n из имени.
+			temp_pointer2=temp_pointer;
+			do if(*temp_pointer2=='\r'||*temp_pointer2=='\n')*temp_pointer2=0; 
+				while(*temp_pointer2++);
+			strcpy(name, temp_pointer);
+			break;}
+	}while(!f_eof(&file));
+	f_close(&file);
+}	
 
 uint8_t play_mp3_n(char *path, uint16_t n){
 	char fname[257];
@@ -389,6 +460,14 @@ uint8_t play_mp3_n(char *path, uint16_t n){
 	code=play_file(fname);
 	return code;
 	}
+
+uint8_t play_playlist_n(char *playlist, uint16_t track){
+	char fname[257];
+	uint8_t code=0;
+	get_name_mp3_from_playlist(playlist, track, fname);
+	code=play_file(fname);
+	return code;
+}
 
 void standby(void){
 	SCB_SCR|=SCB_SCR_SLEEPDEEP;
@@ -444,7 +523,8 @@ static uint16_t get_random(void)
 void main(){
 	//rcc_clock_setup_in_hse_8mhz_out_72mhz();
 	//standby();
-	rcc_clock_setup_in_hsi_out_24mhz();//чем медленнее тем экономичнее
+	//rcc_clock_setup_in_hsi_out_24mhz();//чем медленнее тем экономичнее
+	rcc_clock_setup_in_hsi_out_48mhz();
 	spi1_init();
 	spi2_init();
 		
@@ -477,11 +557,11 @@ void main(){
 	
 	//disk init
 	FATFS fs;
-	uint16_t mp3_cnt=0;
+	
 	if(f_mount(&fs, "", 0)) stprintf("mount ERROR\r\n");;
 	//ls("/");
 	mp3_cnt=cnt_mp3_in_dir("/");
-	files_count=mp3_cnt;
+	//files_count=mp3_cnt;
 	stprintf("Mp3 файлов %d\r\n",mp3_cnt);
 	uint16_t init_random=0;
 	init_random=get_random();
@@ -496,13 +576,42 @@ void main(){
     uint8_t ret_code=0;
     track=rand()%mp3_cnt+1;
 	while (1){
-		if(mp3_cnt)ret_code=play_mp3_n("/",track);
+		if(mp3_cnt){
+			if(play_mode!=2)ret_code=play_mp3_n("/",track);
+				else ret_code=play_playlist_n("playlist.m3u", track);
 		
-		//три режима последоватьный, рандомный и зануда
+		}
+		if(play_mode_change){
+			//сменился режим проигрывания надо обновить mp3_cnt и track
+			play_mode_change=0;
+			if(play_mode==2){
+				mp3_cnt=get_playlist_size("playlist.m3u");
+				stprintf("Mp3 файлов в playlist.m3u %d\r\n",mp3_cnt);
+				}
+				else{ 
+				mp3_cnt=cnt_mp3_in_dir("/");
+				stprintf("Mp3 файлов на флешке %d\r\n", mp3_cnt);
+				}
+			if(track>mp3_cnt)mp3_cnt=1;	
+			}
+		
+		//четыре режима последоватьный, рандомный, зануда и playlist
 		
 		if(!zanuda_mode && !ret_code){ //если трек не зациклен
-			if(rand_mode) track=rand()%mp3_cnt+1; //следующий случайный трек
-				else if(track<mp3_cnt)track++; else track=1;
+			//if(rand_mode) track=rand()%mp3_cnt+1; //следующий случайный трек
+			//	else if(track<mp3_cnt)track++; else track=1;
+			switch(play_mode){
+				case 0:
+					if(track<mp3_cnt)track++; else track=1;
+					break;
+				case 1:
+					track=rand()%mp3_cnt+1;
+					break;
+				case 2:
+					if(track<mp3_cnt)track++; else track=1;
+					break;
+			}
+		
 		}
 		
 		if(ret_code==3) if(track<mp3_cnt)track++; else track=1;//вперёд
